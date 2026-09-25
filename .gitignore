@@ -1,0 +1,43 @@
+# ---- Installed and generated -------------------------------------------------
+node_modules/
+.pnp
+.pnp.js
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+.vercel
+
+# ---- Secrets: never committed ------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# ---- Logs, editors, operating systems ------------------------------------------
+*.log
+npm-debug.log*
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ---- Personal agent settings ---------------------------------------------------
+.claude/settings.local.json
+# private skills the maintainer keeps next to the public one
+.claude/skills/customize/
+.claude/skills/release/
+
+# ---- Scratch space written while a clone runs ------------------------------------
+temp/
+.clone-tmp/
+.clone-shots/
+.mcp-shots/
+.qa-tmp/
+.asset-proxy-cache/
+.ob-cache/
+# backup that tokenize-css leaves beside globals.css
+*.pre-tokenize.bak

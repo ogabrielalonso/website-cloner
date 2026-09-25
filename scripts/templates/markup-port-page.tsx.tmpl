@@ -1,0 +1,341 @@
+/**
+ * markup-port-page.tsx.tmpl — copy-ready TEMPLATE for the markup-port catch-all page
+ * the orchestrator would otherwise rewrite from scratch every clone. Mirrors the PROVEN
+ * structure of the landonorris.com clone (markup-port + script replay, 0/12 pixel-diff).
+ *
+ * Extension is .tsx.tmpl (NOT .tsx) so the template repo's `npm run typecheck` does
+ * not compile it — it references clone-generated files (src/generated/*) that only
+ * exist inside a clone workspace.
+ *
+ * This file contains THREE sections, each a SEPARATE destination file. Copy each to
+ * its path (App Router requires the server page and the client runtime to be different
+ * files — a file with `generateStaticParams` CANNOT also be "use client"):
+ *
+ *   §1  src/lib/routes.ts                    (server helpers + RouteData type)
+ *   §2  src/app/[[...slug]]/page.tsx         (SERVER component — no "use client")
+ *   §3  src/components/MarkupPortRuntime.tsx (CLIENT component — "use client")
+ *
+ * Prereqs: `node scripts/slice-routes.mjs` has written src/generated/manifest.json +
+ * src/generated/routes/<slug>.json, and the JS graph is on disk (download-assets.mjs +
+ * close-js-graph.mjs for ESM sites). Then run `npx tsc --noEmit` in the clone to verify.
+ *
+ * WEBFLOW NOTE: when the source HTML lists many commented-out <script> tags (Webflow),
+ * the route JSON's externalScripts can be noisy — curate the real ordered list from
+ * Chrome DevTools `list_network_requests` into a static array and feed THAT to the
+ * runtime instead of route.externalScripts (see the landonorris src/lib/replay-scripts.ts).
+ */
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §1 — src/lib/routes.ts   (server-only: reads the generated JSON from disk)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import fs from "node:fs";
+import path from "node:path";
+
+export interface ExternalScript {
+  src: string;
+  type: string;
+  /** Raw attribute string from the original tag (type="module", async, data-*, fs-*). */
+  attrs: string;
+}
+
+export interface RouteData {
+  slug: string;
+  path: string;
+  lang: string;
+  title: string;
+  description: string;
+  ogImage: string;
+  canonical: string;
+  hasLoader: boolean;
+  prePaint: string;
+  /** Config-var inline scripts (e.g. WordPress wp_localize_script: et_pb_custom = {...})
+   *  that the bundles READ on init — must run BEFORE externalScripts. No DOM mutation,
+   *  so safe to run early. Populate from inline <script> that are pure assignments
+   *  appearing before the first bundle; default [] is harmless for sites without them. */
+  preInline?: string[];
+  /** CSS selector the replayed scripts must be injected INTO, instead of document.body.
+   *  SvelteKit hydrates `document.currentScript.parentElement` — its bootstrap must run inside
+   *  the shell wrapper (e.g. ".page-body"), or kit.start() mounts one level too high and drops
+   *  the wrapper's load-bearing styles. Default (unset) = document.body, correct for most sites. */
+  inlineScriptTarget?: string;
+  deferredInline: string[];
+  externalScripts: ExternalScript[];
+  bodyHTML: string;
+}
+
+const ROUTES_DIR = path.join(process.cwd(), "src/generated/routes");
+
+export function slugArrToKey(slug?: string[]): string {
+  if (!slug || slug.length === 0) return "index";
+  return slug.join("__");
+}
+
+export function listRouteSlugs(): string[] {
+  return fs
+    .readdirSync(ROUTES_DIR)
+    .filter((f) => f.endsWith(".json"))
+    .map((f) => f.replace(/\.json$/, ""));
+}
+
+export function loadRoute(key: string): RouteData | null {
+  const file = path.join(ROUTES_DIR, `${key}.json`);
+  if (!fs.existsSync(file)) return null;
+  return JSON.parse(fs.readFileSync(file, "utf8")) as RouteData;
+}
+
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&apos;": "'",
+};
+export function decodeEntities(s: string): string {
+  return s.replace(/&(amp|lt|gt|quot|#39|apos);/g, (m) => ENTITIES[m] ?? m);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §2 — src/app/[[...slug]]/page.tsx   (SERVER component — do NOT add "use client")
+// ═══════════════════════════════════════════════════════════════════════════════
+
+import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { MarkupPortRuntime } from "@/components/MarkupPortRuntime";
+import {
+  decodeEntities,
+  listRouteSlugs,
+  loadRoute,
+  slugArrToKey,
+} from "@/lib/routes";
+
+// Every route is known at build time; anything else 404s (matches the original
+// site's behaviour for unpublished / invalid paths).
+export const dynamicParams = false;
+
+type Params = { slug?: string[] };
+
+export function generateStaticParams(): Params[] {
+  return listRouteSlugs().map((slug) =>
+    slug === "index" ? { slug: [] } : { slug: slug.split("__") },
+  );
+}
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<Params>;
+}): Promise<Metadata> {
+  const { slug } = await params;
+  const route = loadRoute(slugArrToKey(slug));
+  if (!route) return {};
+  const title = decodeEntities(route.title || "");
+  const description = decodeEntities(route.description || "");
+  const md: Metadata = { title, description };
+  if (route.ogImage) {
+    md.openGraph = { title, description, images: [route.ogImage] };
+    md.twitter = { title, description, images: [route.ogImage] };
+  }
+  return md;
+}
+
+export default async function Page({ params }: { params: Promise<Params> }) {
+  const { slug } = await params;
+  const route = loadRoute(slugArrToKey(slug));
+  if (!route) notFound();
+
+  return (
+    <>
+      {/* display:contents makes this wrapper transparent to layout, so the ported
+          body children sit exactly where the original's direct body children did.
+          VERIFY the source CSS has no `body > *` direct-child selectors before relying
+          on this (it usually doesn't). */}
+      <div
+        style={{ display: "contents" }}
+        suppressHydrationWarning
+        dangerouslySetInnerHTML={{ __html: route.bodyHTML }}
+      />
+      <MarkupPortRuntime
+        externalScripts={route.externalScripts}
+        inlineScripts={route.deferredInline}
+        preInline={route.preInline}
+        prePaint={route.prePaint}
+        inlineScriptTarget={route.inlineScriptTarget}
+      />
+    </>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §3 — src/components/MarkupPortRuntime.tsx   (CLIENT component)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+"use client";
+
+import { useEffect, useLayoutEffect } from "react";
+import type { ExternalScript } from "@/lib/routes";
+
+// Module-level guard: the original bundles install global singletons and must be
+// injected exactly once per document — never twice under React StrictMode's
+// double-invoke or a re-mount. NOTE: this means replay does NOT re-run on a client
+// route change — which is correct ONLY because markup-port uses plain <a> full-page
+// navigation (each load re-runs the bundles fresh). If you ever switch internal links
+// to <Link> SPA nav, this guard leaves the destination route's scripts un-run (dead
+// animations) — keep links as <a>.
+let injected = false;
+
+/**
+ * Replays the live site's REAL script sequence against the ported markup. This is
+ * what makes the clone behave 1:1 — GSAP/Lenis/WebGL/Rive/Taxi etc. run their actual
+ * code over the actual DOM instead of being re-implemented (and drifting).
+ *
+ * Scripts are chained on `onload` so each executes only after the previous one has
+ * evaluated, preserving original order. `async=false` keeps the ES-module graph in
+ * order too. After the last one, the route's inline scripts run, then we re-fire
+ * DOMContentLoaded + load — because on the clone the document is already `complete`
+ * when React mounts, so handlers the bundles registered for those events would never
+ * run otherwise.
+ */
+export function MarkupPortRuntime({
+  externalScripts = [],
+  inlineScripts = [],
+  preInline = [],
+  prePaint = "",
+  inlineScriptTarget,
+}: {
+  externalScripts?: ExternalScript[];
+  inlineScripts?: string[];
+  preInline?: string[];
+  prePaint?: string;
+  inlineScriptTarget?: string;
+}) {
+  // Where replayed scripts get appended. SvelteKit needs the shell wrapper (see RouteData);
+  // everything else uses document.body. Resolved lazily inside the effect (DOM must exist).
+  const scriptHost = () =>
+    (inlineScriptTarget ? document.querySelector(inlineScriptTarget) : null) ?? document.body;
+  // Declarative-shadow-DOM hydration. A server-rendered <template shadowrootmode> is
+  // reconstructed into a real shadow root by the browser's HTML PARSER on the static
+  // load — but NOT when content is set via innerHTML (the dangerouslySetInnerHTML path,
+  // and any replayed script that assigns innerHTML). Open shadow roots captured at slice
+  // time (live MDX previews, web-component demos) would otherwise stay inert empty hosts
+  // and collapse. Reconstruct any leftover DSD templates here, pre-paint to avoid a flash.
+  // (No-op when the parser already consumed them, so it's safe belt-and-suspenders.)
+  useLayoutEffect(() => {
+    try {
+      document.querySelectorAll("template[shadowrootmode]").forEach((node) => {
+        const tpl = node as HTMLTemplateElement;
+        const host = tpl.parentElement;
+        if (!host) return;
+        // Already has a shadow root (parser consumed an earlier template / native DSD): a
+        // SECOND declarative template for the same host is inert — remove it so it doesn't
+        // render as visible <template> content, then bail.
+        if (host.shadowRoot) { tpl.remove(); return; }
+        const mode = (tpl.getAttribute("shadowrootmode") as "open" | "closed") || "open";
+        try {
+          host.attachShadow({
+            mode,
+            // forward the other declarative-shadow attributes so focus/clone semantics match
+            delegatesFocus: tpl.hasAttribute("shadowrootdelegatesfocus"),
+            clonable: tpl.hasAttribute("shadowrootclonable"),
+          }).appendChild(tpl.content);
+          tpl.remove();
+        } catch { /* host type can't carry a shadow root — leave the template inert */ }
+      });
+    } catch (e) {
+      console.warn("[MarkupPortRuntime] shadow-DOM hydration error", e);
+    }
+  }, []);
+
+  // Pre-paint FOUC class-adders run before the browser paints (e.g. Webflow's
+  // w-mod-js, or a custom is-loading). useLayoutEffect fires synchronously pre-paint.
+  useLayoutEffect(() => {
+    if (!prePaint || !prePaint.trim()) return;
+    let s: HTMLScriptElement | null = null;
+    try {
+      s = document.createElement("script");
+      s.textContent = prePaint;
+      document.head.appendChild(s);
+    } catch (e) {
+      console.warn("[MarkupPortRuntime] prePaint error", e);
+    }
+    // cleanup so StrictMode's double-invoke (and hot-reload remounts) don't stack copies in <head>
+    return () => { s?.remove(); };
+  }, [prePaint]);
+
+  useEffect(() => {
+    if (injected) return;
+    injected = true;
+
+    // Config vars the bundles read on init (WordPress wp_localize_script, etc.) MUST run
+    // before the external bundles — they only assign globals, no DOM mutation.
+    for (const code of preInline) {
+      if (!code || !code.trim()) continue;
+      try {
+        const s = document.createElement("script");
+        s.textContent = code;
+        document.head.appendChild(s);
+      } catch (e) {
+        console.warn("[MarkupPortRuntime] preInline error", e);
+      }
+    }
+
+    const fireReady = () => {
+      try {
+        document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true, cancelable: false }));
+      } catch { /* noop */ }
+      try { window.dispatchEvent(new Event("load")); } catch { /* noop */ }
+    };
+
+    const runInlineScripts = () => {
+      for (const code of inlineScripts) {
+        if (!code || !code.trim()) continue;
+        try {
+          const s = document.createElement("script");
+          s.textContent = code;
+          scriptHost().appendChild(s);
+        } catch (e) {
+          console.warn("[MarkupPortRuntime] inline script error", e);
+        }
+      }
+    };
+
+    // Apply the original tag's attributes (type="module", crossorigin, data-*, fs-*),
+    // EXCEPT src (set explicitly) and async (forced false so the onload chain keeps order).
+    const applyAttrs = (el: HTMLScriptElement, attrs: string) => {
+      // match BOTH quote styles — a single-quoted type='module' otherwise lost its value and
+      // the script was demoted to a classic script ("Cannot use import statement outside a module").
+      const re = /([:\w-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/g;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(attrs))) {
+        if (!m[0]) { re.lastIndex++; continue; } // skip zero-width matches (avoid infinite loop)
+        const name = m[1].toLowerCase();
+        if (name === "src" || name === "async") continue;
+        try { el.setAttribute(m[1], m[2] ?? m[3] ?? ""); } catch { /* invalid attr name */ }
+      }
+    };
+
+    let i = 0;
+    const injectNext = () => {
+      if (i >= externalScripts.length) {
+        runInlineScripts();
+        fireReady();
+        return;
+      }
+      const def = externalScripts[i++];
+      const s = document.createElement("script");
+      applyAttrs(s, def.attrs || "");
+      s.async = false;
+      s.addEventListener("load", injectNext);
+      s.addEventListener("error", () => {
+        console.warn("[MarkupPortRuntime] failed to load", def.src);
+        injectNext();
+      });
+      s.src = def.src; // set src LAST so all attrs (incl. type=module) are read at append
+      scriptHost().appendChild(s);
+    };
+
+    injectNext();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return null;
+}

@@ -1,0 +1,7 @@
+# Line endings: the repository stores LF; Git decides what is text.
+* text=auto
+# Scripts run on Linux and macOS, so they stay LF on every checkout.
+*.sh text eol=lf
+# Windows command files need CRLF to run.
+*.bat text eol=crlf
+*.cmd text eol=crlf
